@@ -1,0 +1,136 @@
+{
+  "name": "4. Reviewer - Content Compliance Checker",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "1cf4f591-1023-4409-8bd9-68263b1db3cc",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [-1456, 176],
+      "webhookId": "reviewer-compliance-checker"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a CONTENT GENERATOR agent.\n\nWrite content based on this request:\n\"{{ $json.chatInput }}\"\n\nGuidelines:\n- Write professional, clear content suitable for a customer-facing or public audience\n- Do not include any personal identifiable information (PII) such as real names, phone numbers, email addresses, or account numbers - use placeholders like [Customer Name] if needed\n- Keep the tone professional and on-brand\n\nOutput only the generated content, no extra commentary.",
+        "options": {
+          "systemMessage": "You are a professional content writer producing customer-facing or public content."
+        }
+      },
+      "id": "aa58048c-c7f0-4de6-90de-224cb3480535",
+      "name": "Generator Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [-1232, 176]
+    },
+    {
+      "parameters": {
+        "options": {"temperature": 0.7}
+      },
+      "id": "76acea26-6071-4422-83e5-cba2272a7395",
+      "name": "Gemini Model - Generator",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [-1152, 400],
+      "credentials": {"googlePalmApi": {"id": "jtN9gxbrtUwZdD78", "name": "Google Gemini(PaLM) Api account 139"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst content = item.output || item.text || '';\nconst wordCount = content.trim().split(/\\s+/).filter(Boolean).length;\nreturn [{ json: { generated_content: content, word_count: wordCount, original_request: $('When chat message received').first().json.chatInput } }];"
+      },
+      "id": "2b28a5ec-008e-46ce-a6ae-8486194106bd",
+      "name": "Prepare for Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-880, 176]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a REVIEWER agent. Your job is to check generated content against a compliance checklist and decide PASS or FAIL.\n\nContent to review:\n---\n{{ $json.generated_content }}\n---\n\nWord count (calculated separately): {{ $json.word_count }}\n\nCheck the content against EACH of these rules:\n1. No PII - the content must NOT contain real names, phone numbers, email addresses, account numbers, or other personal identifiable information (placeholders like [Customer Name] are fine)\n2. Professional tone - the content must be polite, professional, and free of slang, profanity, or unprofessional language\n3. Length limit - the content must be under 200 words\n4. No unsubstantiated claims - the content must not make absolute guarantees or claims like \"100% guaranteed\", \"never fails\", \"best in the world\" without qualification\n\nRespond in EXACTLY this format, nothing else:\nCheck 1 - No PII: <Pass/Fail> - <one short reason>\nCheck 2 - Professional Tone: <Pass/Fail> - <one short reason>\nCheck 3 - Length Limit: <Pass/Fail> - <one short reason>\nCheck 4 - No Unsubstantiated Claims: <Pass/Fail> - <one short reason>\nOverall Result: <PASS/FAIL>\nSummary: <one sentence overall summary, and if FAIL, what needs to change>",
+        "options": {
+          "systemMessage": "You are a strict but fair content compliance reviewer. You always respond using exactly the requested format with no extra commentary. Overall Result is PASS only if ALL 4 checks pass; if ANY check fails, Overall Result is FAIL."
+        }
+      },
+      "id": "be035fe3-26c7-4e11-bf7f-c1ff45bb8d85",
+      "name": "Reviewer Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [-656, 176]
+    },
+    {
+      "parameters": {
+        "options": {"temperature": 0}
+      },
+      "id": "fc9b9fb4-5863-4079-baa5-488448e0b16c",
+      "name": "Gemini Model - Reviewer",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [-576, 400],
+      "credentials": {"googlePalmApi": {"id": "jtN9gxbrtUwZdD78", "name": "Google Gemini(PaLM) Api account 139"}}
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst reviewRaw = (item.output || item.text || '').toString();\n\nfunction parseField(text, label) {\n  const regex = new RegExp(label.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&') + '\\\\s*:\\\\s*(.+)', 'i');\n  const match = text.match(regex);\n  return match ? match[1].trim() : '';\n}\n\nconst check1 = parseField(reviewRaw, 'Check 1 - No PII');\nconst check2 = parseField(reviewRaw, 'Check 2 - Professional Tone');\nconst check3 = parseField(reviewRaw, 'Check 3 - Length Limit');\nconst check4 = parseField(reviewRaw, 'Check 4 - No Unsubstantiated Claims');\nconst overallRaw = parseField(reviewRaw, 'Overall Result');\nconst summary = parseField(reviewRaw, 'Summary');\n\nconst overallResult = overallRaw.toUpperCase().includes('PASS') ? 'PASS' : 'FAIL';\n\nconst prep = $('Prepare for Review').first().json;\n\nreturn [{\n  json: {\n    generated_content: prep.generated_content,\n    word_count: prep.word_count,\n    check_no_pii: check1,\n    check_professional_tone: check2,\n    check_length_limit: check3,\n    check_unsubstantiated_claims: check4,\n    overall_result: overallResult,\n    summary: summary,\n    reviewed_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "fddd24c0-d9cd-4146-8fcb-a1935226137e",
+      "name": "Parse Review Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-304, 176]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+                "conditions": [{"id": "pass-cond", "leftValue": "={{ $json.overall_result }}", "rightValue": "PASS", "operator": {"type": "string", "operation": "equals"}}],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Pass"
+            },
+            {
+              "conditions": {
+                "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 2},
+                "conditions": [{"id": "fail-cond", "leftValue": "={{ $json.overall_result }}", "rightValue": "FAIL", "operator": {"type": "string", "operation": "equals"}}],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Fail"
+            }
+          ]
+        },
+        "options": {"fallbackOutput": "extra"}
+      },
+      "id": "12760154-2ff1-4c47-b838-855ea704ed8c",
+      "name": "Switch - Pass or Fail",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [-80, 160]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When chat message received": {"main": [[{"node": "Generator Agent", "type": "main", "index": 0}]]},
+    "Generator Agent": {"main": [[{"node": "Prepare for Review", "type": "main", "index": 0}]]},
+    "Gemini Model - Generator": {"ai_languageModel": [[{"node": "Generator Agent", "type": "ai_languageModel", "index": 0}]]},
+    "Prepare for Review": {"main": [[{"node": "Reviewer Agent", "type": "main", "index": 0}]]},
+    "Reviewer Agent": {"main": [[{"node": "Parse Review Result", "type": "main", "index": 0}]]},
+    "Gemini Model - Reviewer": {"ai_languageModel": [[{"node": "Reviewer Agent", "type": "ai_languageModel", "index": 0}]]},
+    "Parse Review Result": {"main": [[{"node": "Switch - Pass or Fail", "type": "main", "index": 0}]]},
+    "Switch - Pass or Fail": {"main": [[], []]}
+  },
+  "active": false,
+  "settings": {"executionOrder": "v1", "binaryMode": "separate", "availableInMCP": false},
+  "versionId": "487c817c-8f54-4440-b515-bfd16e3f0090",
+  "meta": {"templateCredsSetupCompleted": true, "instanceId": "0db25aff814d9d346b0e6d897946122cfc12e064b6e58ff53ffd8c9cc948ff20"},
+  "nodeGroups": [],
+  "id": "Qgg0ZzN5KHugHsBe",
+  "tags": []
+}

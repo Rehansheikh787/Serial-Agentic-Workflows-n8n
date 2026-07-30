@@ -1,0 +1,580 @@
+{
+  "name": "JD-Driven Role-Agnostic Candidate Evaluator",
+  "nodes": [
+    {
+      "parameters": {
+        "public": true,
+        "initialMessages": "👋 Welcome to the AI Candidate Evaluator!\n\nThis workflow evaluates candidates against your specific Job Description.\n\n**To get started, please provide:**\n1. Paste your Job Description below (or describe the role)\n2. I'll extract the key requirements and evaluate all candidates from the sheet\n\nPaste your JD now:",
+        "options": {}
+      },
+      "id": "7ad0a6e2-456d-4961-b318-fff92fd52003",
+      "name": "Chat Trigger (Paste JD)",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -752,
+        -48
+      ],
+      "webhookId": "jd-evaluator-chat-trigger"
+    },
+    {
+      "parameters": {
+        "agent": "conversationalAgent",
+        "promptType": "define",
+        "text": "=You are an expert HR analyst and talent acquisition specialist.\n\nA recruiter has provided the following Job Description:\n\n---\n{{ $json.chatInput }}\n---\n\nExtract and return ONLY a valid JSON object (no markdown, no extra text) with these fields:\n\n{\n  \"role_title\": \"<exact job title from JD>\",\n  \"seniority_level\": \"<Junior / Mid / Senior / Lead / Director / VP>\",\n  \"department\": \"<e.g. Product, Engineering, Marketing, Sales, HR, Finance>\",\n  \"must_have_skills\": [\"<skill1>\", \"<skill2>\", \"<skill3>\"],\n  \"good_to_have_skills\": [\"<skill1>\", \"<skill2>\"],\n  \"min_experience_years\": <number>,\n  \"max_experience_years\": <number or null if not specified>,\n  \"key_responsibilities\": [\"<resp1>\", \"<resp2>\", \"<resp3>\"],\n  \"industry_preference\": \"<preferred industry or 'Any'>\",\n  \"education_requirement\": \"<e.g. B.Tech, MBA, Any Graduate>\",\n  \"ctc_budget_max\": <number in same unit as JD or null if not mentioned>,\n  \"evaluation_weights\": {\n    \"technical_skills_match\": <weight out of 100, how important technical skills are>,\n    \"experience_relevance\": <weight out of 100>,\n    \"leadership_fitment\": <weight out of 100>,\n    \"education_fitment\": <weight out of 100>\n  },\n  \"jd_summary\": \"<2-3 sentence summary of this role for candidate emails>\"\n}\n\nMake sure evaluation_weights sum to 100.\nReturn ONLY the JSON. No explanation.",
+        "options": {
+          "systemMessage": "You are a structured JSON extractor. Return only valid JSON with no markdown formatting."
+        }
+      },
+      "id": "60703fe3-9919-4b91-bef0-05d4f0350c8b",
+      "name": "JD Parser Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -528,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.1-flash-lite",
+        "options": {}
+      },
+      "id": "45af6abd-38f4-46e2-ae45-aa7e205339f2",
+      "name": "Gemini Model (JD Parser)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -528,
+        160
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "jtN9gxbrtUwZdD78",
+          "name": "Google Gemini(PaLM) Api account 139"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse and validate JD extraction output\nconst raw = $input.item.json.output;\n\nlet jd;\ntry {\n  const cleaned = raw.replace(/```json\\n?/gi, '').replace(/```\\n?/gi, '').trim();\n  jd = JSON.parse(cleaned);\n} catch (e) {\n  // Fallback structure if parsing fails\n  jd = {\n    role_title: 'Unknown Role',\n    seniority_level: 'Mid',\n    department: 'General',\n    must_have_skills: [],\n    good_to_have_skills: [],\n    min_experience_years: 0,\n    max_experience_years: null,\n    key_responsibilities: [],\n    industry_preference: 'Any',\n    education_requirement: 'Any',\n    ctc_budget_max: null,\n    evaluation_weights: {\n      technical_skills_match: 30,\n      experience_relevance: 30,\n      leadership_fitment: 20,\n      education_fitment: 20\n    },\n    jd_summary: 'Role as specified by the hiring team.'\n  };\n}\n\n// Store JD in workflow static data so all loop iterations can access it\nreturn {\n  json: {\n    jd_parsed: jd,\n    jd_raw: raw,\n    jd_processed_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "c33b4dad-ad35-45a8-8a7b-ef7b15be7ef4",
+      "name": "Parse JD Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -176,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge JD context into each candidate row so loop iterations carry it\nconst jdData = $('Parse JD Output').item.json;\nconst candidates = $input.all();\n\nreturn candidates.map(c => ({\n  json: {\n    ...c.json,\n    _jd: jdData.jd_parsed,\n    _jd_processed_at: jdData.jd_processed_at\n  }\n}));"
+      },
+      "id": "e3a61208-dfec-4557-aec5-a01e01eee4d5",
+      "name": "Attach JD to Each Candidate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "e518a735-0cbb-4342-b3ba-a66559e3e254",
+      "name": "Loop Over Candidates",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        496,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "agent": "conversationalAgent",
+        "promptType": "define",
+        "text": "=You are a senior HR evaluator. Evaluate this candidate STRICTLY against the provided Job Description requirements.\n\n=== JOB DESCRIPTION REQUIREMENTS ===\nRole Title: {{ $('Attach JD to Each Candidate').item.json._jd.role_title }}\nSeniority: {{ $('Attach JD to Each Candidate').item.json._jd.seniority_level }}\nDepartment: {{ $('Attach JD to Each Candidate').item.json._jd.department }}\nMust-Have Skills: {{ $('Attach JD to Each Candidate').item.json._jd.must_have_skills }}\nGood-to-Have Skills: {{ $('Attach JD to Each Candidate').item.json._jd.good_to_have_skills }}\nMin Experience: {{ $('Attach JD to Each Candidate').item.json._jd.min_experience_years }} years\nMax CTC Budget: {{ $('Attach JD to Each Candidate').item.json._jd.ctc_budget_max }}\nEducation Required: {{ $('Attach JD to Each Candidate').item.json._jd.education_requirement }}\nKey Responsibilities: {{ $('Attach JD to Each Candidate').item.json._jd.key_responsibilities }}\nIndustry Preference: {{ $('Attach JD to Each Candidate').item.json._jd.industry_preference }}\n\nEvaluation Weights:\n- Technical Skills Match:{{ $('Parse JD Output').item.json.jd_parsed.evaluation_weights.technical_skills_match }} %\n- Experience Relevance: {{ $('Parse JD Output').item.json.jd_parsed.evaluation_weights.experience_relevance }}%\n- Leadership Fitment:{{ $('Parse JD Output').item.json.jd_parsed.evaluation_weights.leadership_fitment }} %\n- Education Fitment: {{ $('Parse JD Output').item.json.jd_parsed.evaluation_weights.education_fitment }}%\n\n=== CANDIDATE PROFILE ===\nName: {{ $('Read Candidate Responses').item.json.Name }}\nYears of Experience: {{ $('Read Candidate Responses').item.json['Years Exp'] }}\nExpected CTC: {{ $('Read Candidate Responses').item.json['Expected CTC'] }}\nKey Skills: {{ $('Read Candidate Responses').item.json['Key Skills'] }}\nProfessional Summary: {{ $('Read Candidate Responses').item.json['Professional Summary'] }}\nEducation Summary: {{ $('Read Candidate Responses').item.json['Education Summary'] }}\n\n=== EVALUATION TASK ===\nScore this candidate ONLY relative to the JD above. A candidate with irrelevant skills for this specific role should score low even if they are generally talented.\n\nReturn ONLY a valid JSON object:\n{\n  \"overall_score\": <0-100, weighted composite score>,\n  \"technical_skills_score\": <0-100, how well their skills match JD must-haves>,\n  \"experience_score\": <0-100, relevance and depth of experience for THIS role>,\n  \"leadership_score\": <0-100, leadership fitment for this seniority level>,\n  \"education_score\": <0-100, education match for this role>,\n  \"skills_matched\": [\"<skills from candidate that match JD must-haves>\"],\n  \"skills_missing\": [\"<JD must-have skills the candidate lacks>\"],\n  \"strengths\": \"<3 strengths SPECIFIC to this JD role, pipe-separated>\",\n  \"weaknesses\": \"<2-3 gaps SPECIFIC to this JD role, pipe-separated>\",\n  \"ctc_fit\": \"<Within Budget / Over Budget / Unknown>\",\n  \"experience_fit\": \"<Under-qualified / Well-matched / Over-qualified>\",\n  \"recommendation\": \"<One sentence specific to this role>\",\n  \"interview_questions\": [\"<targeted question 1 based on gaps>\", \"<targeted question 2>\", \"<targeted question 3>\"]\n}\n\nReturn ONLY the JSON. No preamble.",
+        "options": {
+          "systemMessage": "You are a precise HR evaluator. Always score candidates relative to the specific JD provided. Return only valid JSON."
+        }
+      },
+      "id": "d3fb5760-fd4c-44bc-b6ef-d13b0f27fe0c",
+      "name": "JD-Matched Evaluator Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        720,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.1-flash-lite",
+        "options": {}
+      },
+      "id": "5618fc34-66a7-48be-b8f3-eed236629fc2",
+      "name": "Gemini Model (Evaluator)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        720,
+        128
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "jtN9gxbrtUwZdD78",
+          "name": "Google Gemini(PaLM) Api account 139"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse evaluator output and merge all data\nconst candidateRow = $('Loop Over Candidates').item.json;\nconst rawOutput = $input.item.json.output;\n\nlet evaluation;\ntry {\n  const cleaned = rawOutput.replace(/```json\\n?/gi, '').replace(/```\\n?/gi, '').trim();\n  evaluation = JSON.parse(cleaned);\n} catch (e) {\n  evaluation = {\n    overall_score: 50,\n    technical_skills_score: 50,\n    experience_score: 50,\n    leadership_score: 50,\n    education_score: 50,\n    skills_matched: [],\n    skills_missing: [],\n    strengths: 'Could not parse|Manual review needed|N/A',\n    weaknesses: 'Could not parse|Manual review needed',\n    ctc_fit: 'Unknown',\n    experience_fit: 'Unknown',\n    recommendation: 'Manual review required.',\n    interview_questions: ['Please review manually.']\n  };\n}\n\nconst jd = candidateRow._jd;\n\nreturn {\n  json: {\n    // Candidate fields\n    name: candidateRow['Name'],\n    email: candidateRow['Email'],\n    years_exp: candidateRow['Years Exp'],\n    expected_ctc: candidateRow['Expected CTC'],\n    key_skills: candidateRow['Key Skills'],\n    professional_summary: candidateRow['Professional Summary'],\n    education_summary: candidateRow['Education Summary'],\n\n    // JD context\n    jd_role_title: jd.role_title,\n    jd_seniority: jd.seniority_level,\n    jd_department: jd.department,\n    jd_summary: jd.jd_summary,\n    jd_must_have_skills: jd.must_have_skills.join(', '),\n\n    // Scores\n    overall_score: evaluation.overall_score,\n    technical_skills_score: evaluation.technical_skills_score,\n    experience_score: evaluation.experience_score,\n    leadership_score: evaluation.leadership_score,\n    education_score: evaluation.education_score,\n\n    // Evaluation details\n    skills_matched: (evaluation.skills_matched || []).join(', '),\n    skills_missing: (evaluation.skills_missing || []).join(', '),\n    strengths: evaluation.strengths,\n    weaknesses: evaluation.weaknesses,\n    ctc_fit: evaluation.ctc_fit,\n    experience_fit: evaluation.experience_fit,\n    recommendation: evaluation.recommendation,\n    interview_questions: (evaluation.interview_questions || []).join(' | '),\n\n    // Status\n    status: evaluation.overall_score >= 70 ? 'SHORTLISTED' : 'NOT SHORTLISTED',\n    evaluated_at: new Date().toISOString()\n  }\n};"
+      },
+      "id": "855ea940-3f51-4853-9816-1344438fe313",
+      "name": "Parse Evaluation Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "13RuZgxArTMKbCWZQdWQI5k2Xnv3353LpLp4g5MFvV4E",
+          "mode": "list",
+          "cachedResultName": "Senior PM Responses ",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/13RuZgxArTMKbCWZQdWQI5k2Xnv3353LpLp4g5MFvV4E/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 980566866,
+          "mode": "list",
+          "cachedResultName": "Candidate evaluation",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/13RuZgxArTMKbCWZQdWQI5k2Xnv3353LpLp4g5MFvV4E/edit#gid=980566866"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Name": "={{ $json.name }}",
+            "Candidate ID": "={{ $('Read Candidate Responses').item.json.row_number }}",
+            "Email": "={{ $json.email }}",
+            "Years Experience": "={{ $json.years_exp }}",
+            "Key Skills": "={{ $json.key_skills }}",
+            "Overall Score": "={{ $json.overall_score }}",
+            "Strength": "={{ $json.strengths }}",
+            "Weakness": "={{ $json.weaknesses }}",
+            "Recommendation": "={{ $json.recommendation }}"
+          },
+          "matchingColumns": [
+            "Candidate ID"
+          ],
+          "schema": [
+            {
+              "id": "Candidate ID",
+              "displayName": "Candidate ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Name",
+              "displayName": "Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Years Experience",
+              "displayName": "Years Experience",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Key Skills",
+              "displayName": "Key Skills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Overall Score",
+              "displayName": "Overall Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Strength",
+              "displayName": "Strength",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Weakness",
+              "displayName": "Weakness",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Recommendation",
+              "displayName": "Recommendation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "a9ac9e33-bc80-4543-86b2-3b92c346d266",
+      "name": "Write to Evaluation Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1248,
+        -48
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "w7M2adGKWTe7r7yI",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "score-check",
+              "leftValue": "={{ $json['Overall Score'] }}",
+              "rightValue": 70,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "517223e2-20c5-416e-995a-b6de17da3c8f",
+      "name": "Score >= 70?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1504,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "arunnandewal@gmail.com",
+        "subject": "=✅ Shortlisted: {{ $json.Name }} for {{ $('Parse Evaluation Output').item.json.jd_role_title }} | JD Match Score: {{ $('Write to Evaluation Sheet').item.json['Overall Score'] }}/100",
+        "message": "=<!DOCTYPE html>\n<html>\n<head>\n<style>\n  body{font-family:Arial,sans-serif;max-width:700px;margin:0 auto;color:#222;}\n  .header{background:linear-gradient(135deg,#1a73e8,#0d47a1);color:white;padding:26px 32px;border-radius:10px 10px 0 0;}\n  .header h1{margin:0;font-size:20px;}\n  .header p{margin:6px 0 0;opacity:.85;font-size:13px;}\n  .body{background:#fff;padding:28px 32px;border:1px solid #dce6f0;}\n  .score-row{display:flex;gap:10px;margin:16px 0;}\n  .score-box{flex:1;background:#f0f7ff;border:1px solid #bbdefb;padding:12px;border-radius:8px;text-align:center;}\n  .score-box .val{font-size:22px;font-weight:bold;color:#1a73e8;}\n  .score-box .lbl{font-size:11px;color:#666;text-transform:uppercase;margin-top:2px;}\n  .big-score{background:#e8f5e9;border:2px solid #43a047;border-radius:50px;display:inline-block;padding:10px 28px;font-size:30px;font-weight:bold;color:#2e7d32;margin:12px 0;}\n  .candidate-card{background:#f8f9fa;border-left:4px solid #1a73e8;padding:14px 18px;border-radius:6px;margin:16px 0;font-size:13px;}\n  .candidate-card p{margin:5px 0;}\n  .section{margin:18px 0;}\n  .section h3{color:#1a73e8;font-size:14px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid #e0e0e0;padding-bottom:5px;margin-bottom:10px;}\n  .tag{display:inline-block;padding:4px 10px;border-radius:12px;font-size:12px;margin:3px;}\n  .tag-match{background:#e8f5e9;color:#2e7d32;}\n  .tag-miss{background:#fce4ec;color:#c62828;}\n  .tag-q{background:#f3e5f5;color:#6a1b9a;}\n  .fit-badge{display:inline-block;padding:5px 14px;border-radius:20px;font-size:13px;font-weight:bold;margin:4px;}\n  .fit-good{background:#e8f5e9;color:#2e7d32;}\n  .fit-warn{background:#fff3e0;color:#e65100;}\n  .fit-bad{background:#fce4ec;color:#c62828;}\n  .footer{background:#f5f7f9;padding:12px 32px;font-size:11px;color:#999;border-radius:0 0 10px 10px;}\n</style>\n</head>\n<body>\n<div class=\"header\">\n  <h1>🏆 Strong JD Match — Shortlisted Candidate</h1>\n  <p>Role: {{ $('Parse Evaluation Output').item.json.jd_role_title }} · {{ $('Parse Evaluation Output').item.json.jd_seniority }} ·{{ $('Parse Evaluation Output').item.json.jd_department }} </p>\n</div>\n<div class=\"body\">\n  <div style=\"text-align:center\">\n    <div class=\"big-score\"> {{ $('Parse Evaluation Output').item.json.overall_score }}/ 100</div>\n    <p style=\"color:#2e7d32;font-weight:bold;margin:4px 0\">SHORTLISTED — Proceed to Interview</p>\n  </div>\n\n  <div class=\"candidate-card\">\n    <p><strong>👤 Name:</strong> {{ $('Parse Evaluation Output').item.json.name }}</p>\n    <p><strong>📧 Email:</strong> {{ $('Parse Evaluation Output').item.json.email }}</p>\n    <p><strong>💼 Experience:{{ $json['Years Experience'] }}</strong>  years &nbsp;|&nbsp; <strong>CTC Fit:</strong> <span class=\"fit-badge {{ $json.ctc_fit === 'Within Budget' ? 'fit-good' : $json.ctc_fit === 'Over Budget' ? 'fit-bad' : 'fit-warn' }}\"></span>{{ $('Parse Evaluation Output').item.json.ctc_fit }}</p>\n    <p><strong>📊 Experience Fit:</strong> <span class=\"fit-badge {{ $json.experience_fit === 'Well-matched' ? 'fit-good' : 'fit-warn' }}\">{{ $('Parse Evaluation Output').item.json.experience_fit }}</span></p>\n  </div>\n\n  <div class=\"section\">\n    <h3>📊 Score Breakdown vs JD</h3>\n    <div class=\"score-row\">\n      <div class=\"score-box\"><div class=\"val\">{{ $('Parse Evaluation Output').item.json.technical_skills_score }}</div><div class=\"lbl\">Technical</div></div>\n      <div class=\"score-box\"><div class=\"val\">{{ $('Parse Evaluation Output').item.json.experience_score }}</div><div class=\"lbl\">Experience</div></div>\n      <div class=\"score-box\"><div class=\"val\">{{ $('Parse Evaluation Output').item.json.leadership_score }}</div><div class=\"lbl\">Leadership</div></div>\n      <div class=\"score-box\"><div class=\"val\">{{ $('Parse Evaluation Output').item.json.education_score }}</div><div class=\"lbl\">Education</div></div>\n    </div>\n  </div>\n\n  <div class=\"section\">\n    <h3>✅ JD Skills Matched</h3>\n    {{ $('Parse Evaluation Output').item.json.skills_matched.split(',').map(s => '<span class=\"tag tag-match\">' + s.trim() + '</span>').join('') }}\n  </div>\n\n  <div class=\"section\">\n    <h3>⚠️ JD Skills Missing</h3>\n    {{  $('Parse Evaluation Output').item.json.skills_missing? $json.skills_missing.split(',').map(s => '<span class=\"tag tag-miss\">' + s.trim() + '</span>').join('') : '<span style=\"color:#999\">No critical gaps</span>' }}\n  </div>\n\n  <div class=\"section\">\n    <h3>💪 Strengths (Role-Specific)</h3>\n    {{$('Parse Evaluation Output').item.json.strengthssplit('|').map(s => '<p style=\"margin:5px 0;background:#f0f7ff;padding:8px 12px;border-radius:5px;font-size:13px;\">• ' + s.trim() + '</p>').join('') }}\n  </div>\n\n  <div class=\"section\">\n    <h3>❓ Suggested Interview Questions</h3>\n    {{ $('Parse Evaluation Output').item.json.interview_questions.split('|').map((q,i) => '<p style=\"margin:6px 0;font-size:13px;\"><strong>Q' + (i+1) + ':</strong> ' + q.trim() + '</p>').join('') }}\n  </div>\n\n  <div class=\"section\">\n    <h3>🤖 AI Recommendation</h3>\n    <p style=\"background:#e8f5e9;padding:12px;border-radius:6px;font-size:13px;\">{{ $('Parse Evaluation Output').item.json.recommendation }}</p>\n  </div>\n\n  <div style=\"background:#f0f7ff;border:1px solid #bbdefb;padding:16px;border-radius:8px;margin-top:20px;\">\n    <strong>Next Step:</strong> Review and reply <strong>APPROVE</strong> or <strong>REJECT</strong> within 48 hours.\n  </div>\n</div>\n<div class=\"footer\">AI Evaluator · Role: {{ $('Parse Evaluation Output').item.json.jd_role_title }}·{{ $('Parse Evaluation Output').item.json.evaluated_at }} </div>\n</body>\n</html>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "2f9a22ab-45ec-4c8f-a825-10ac1ebec7ba",
+      "name": "Email HM — Shortlisted",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1792,
+        -64
+      ],
+      "webhookId": "e0e06cea-55e0-4d93-a3cb-d73ffc22f87e",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "D9UWEN6OzxAV31UY",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "=arunnandewal@gmail.com",
+        "subject": "=Your Application for {{ $('Attach JD to Each Candidate').item.json._jd.role_title }} — Update",
+        "message": "=<!DOCTYPE html>\n<html>\n<head>\n<style>\n  body{font-family:Arial,sans-serif;max-width:580px;margin:0 auto;color:#222;}\n  .header{background:linear-gradient(135deg,#546e7a,#263238);color:white;padding:24px 32px;border-radius:10px 10px 0 0;}\n  .body{padding:28px 32px;border:1px solid #dce6f0;background:white;}\n  .footer{background:#f5f5f5;padding:12px 32px;font-size:11px;color:#999;border-radius:0 0 10px 10px;}\n</style>\n</head>\n<body>\n<div class=\"header\"><h2 style=\"margin:0\">{{ $('Attach JD to Each Candidate').item.json._jd.role_title }}</h2><p style=\"margin:6px 0 0;opacity:.85\">Application Status</p></div>\n<div class=\"body\">\n  <p>Dear {{ $('Attach JD to Each Candidate').item.json.Name }},</p>\n  <p>Thank you for your interest in the <strong>{{ $('Attach JD to Each Candidate').item.json._jd.role_title }}</strong> role and for the time you invested in your application.</p>\n  <p>After carefully reviewing your profile against our current requirements, we have decided not to proceed at this stage. This was a competitive process and does not reflect on your overall capabilities.</p>\n  <p>We will keep your profile on file and encourage you to apply for future openings that may be a stronger match.</p>\n  <p>We wish you the very best ahead.</p>\n  <p>Warm regards,<br/><strong>Talent Acquisition Team</strong></p>\n</div>\n<div class=\"footer\">Automated notification. Please do not reply to this email.</div>\n</body>\n</html>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "338cb4f2-d2bb-4919-826f-0f2569bbf170",
+      "name": "Email Candidate — Not Shortlisted",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1968,
+        176
+      ],
+      "webhookId": "7a86f98d-11c8-4308-b207-779d829fc300",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "D9UWEN6OzxAV31UY",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "13RuZgxArTMKbCWZQdWQI5k2Xnv3353LpLp4g5MFvV4E",
+          "mode": "list",
+          "cachedResultName": "Senior PM Responses ",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/13RuZgxArTMKbCWZQdWQI5k2Xnv3353LpLp4g5MFvV4E/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Candidate Responses",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/13RuZgxArTMKbCWZQdWQI5k2Xnv3353LpLp4g5MFvV4E/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "3b5ae524-795a-4d9b-8411-6e7b8c89c2a8",
+      "name": "Read Candidate Responses",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        48,
+        -48
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "w7M2adGKWTe7r7yI",
+          "name": "Google Sheets OAuth2 API"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Chat Trigger (Paste JD)": {
+      "main": [
+        [
+          {
+            "node": "JD Parser Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Model (JD Parser)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "JD Parser Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JD Parser Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse JD Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse JD Output": {
+      "main": [
+        [
+          {
+            "node": "Read Candidate Responses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach JD to Each Candidate": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Candidates": {
+      "main": [
+        [],
+        [
+          {
+            "node": "JD-Matched Evaluator Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Model (Evaluator)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "JD-Matched Evaluator Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JD-Matched Evaluator Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Evaluation Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Evaluation Output": {
+      "main": [
+        [
+          {
+            "node": "Write to Evaluation Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write to Evaluation Sheet": {
+      "main": [
+        [
+          {
+            "node": "Score >= 70?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score >= 70?": {
+      "main": [
+        [
+          {
+            "node": "Email HM — Shortlisted",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email Candidate — Not Shortlisted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email HM — Shortlisted": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Candidate — Not Shortlisted": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Candidate Responses": {
+      "main": [
+        [
+          {
+            "node": "Attach JD to Each Candidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "d2e0701d-7819-4e76-aa5c-ba0cb82a474a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0db25aff814d9d346b0e6d897946122cfc12e064b6e58ff53ffd8c9cc948ff20"
+  },
+  "nodeGroups": [],
+  "id": "upB74bnnPVR5FKu2",
+  "tags": []
+}
